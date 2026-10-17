@@ -1,0 +1,18 @@
+[package]
+name = "sqlautopsy"
+version = "0.1.0"
+edition = "2024"
+description = "Reads SQL Server memory dumps (SQLDump*.txt, .log, .mdmp) on any platform"
+license = "MIT"
+repository = "https://github.com/rudi-bruchez/sqlautopsy"
+
+[dependencies]
+
+# The input is a dump from someone else's server: untrusted bytes. No unsafe
+# code, and pedantic clippy as the default; allow a lint here, with a reason,
+# rather than scattering #[allow] through the code.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

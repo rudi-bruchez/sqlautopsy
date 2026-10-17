@@ -1,0 +1,8 @@
+/target
+
+# Real dumps hold a server's memory: never commit one.
+SQLDump*
+SQLDmpr*
+*.mdmp
+*.dmp
+!tests/fixtures/**

@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # The tag and Cargo.toml must agree, or `sqlautopsy --version` would name a
+  # build nobody can find. The notes are built here too, so a tag whose
+  # changelog section is missing fails before anything is compiled.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Check the tag matches Cargo.toml
+        id: tag
+        env:
+          # Through env, not interpolated: an input with shell metacharacters
+          # would otherwise become script.
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          file="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "$RELEASE_TAG" != "$file" ]; then
+            echo "tag $RELEASE_TAG does not match Cargo.toml ($file)"; exit 1
+          fi
+          echo "version=${file#v}" >> "$GITHUB_OUTPUT"
+      - name: Notes
+        env:
+          version: ${{ steps.tag.outputs.version }}
+        run: |
+          set -eu
+          scripts/release-notes.sh "$version" "$GITHUB_REPOSITORY" \
+            "sqlautopsy_${version}_checksums.txt" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+  # Rust does not cross-compile to Windows and macOS from Linux without extra
+  # toolchains, so each target builds on its own runner. Linux builds use musl
+  # for a static binary that runs on any distribution.
+  build:
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,  name: linux_x64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux_arm64 }
+          - { os: macos-latest,     target: aarch64-apple-darwin,       name: osx_arm64 }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     name: win_x64 }
+    runs-on: ${{ matrix.os }}
+    env:
+      version: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Toolchain
+        shell: bash
+        run: |
+          set -eu
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          if [[ "${{ matrix.target }}" == *musl ]]; then
+            sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+          fi
+      - name: Test
+        shell: bash
+        run: cargo test --release --target "${{ matrix.target }}"
+      - name: Build and package
+        shell: bash
+        run: |
+          set -eu
+          cargo build --release --locked --target "${{ matrix.target }}"
+          name="sqlautopsy_${version}_${{ matrix.name }}"
+          mkdir -p "staging/$name" dist
+          exe=sqlautopsy
+          [[ "${{ matrix.name }}" == win_* ]] && exe=sqlautopsy.exe
+          cp "target/${{ matrix.target }}/release/$exe" LICENSE README.md "staging/$name/"
+          # Smoke-test the binary that ships, not the tree it came from.
+          "staging/$name/$exe" --version | grep -qx "sqlautopsy $version"
+          if [[ "${{ matrix.name }}" == win_* ]]; then
+            (cd staging && 7z a -tzip -bso0 "../dist/$name.zip" "$name")
+          else
+            tar czf "dist/$name.tar.gz" -C staging "$name"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    env:
+      version: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          set -eu
+          (cd dist && sha256sum * > "sqlautopsy_${version}_checksums.txt")
+          ls -lh dist
+          scripts/release-notes.sh "$version" "$GITHUB_REPOSITORY" \
+            "sqlautopsy_${version}_checksums.txt" > "$RUNNER_TEMP/notes.md"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          tag="$RELEASE_TAG"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$tag" dist/* --title "$tag" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
