@@ -26,3 +26,9 @@ section fails the release workflow.
   that was read or written), and each loaded module with its path, file version,
   PDB name and PDB identifier. A dump written without an exception reports the
   thread its exception stream records instead of a false exception.
+- Frames and exceptions are named with Microsoft's public symbols, downloaded
+  from `msdl.microsoft.com` into a SymStore-layout cache, when the `.mdmp` is
+  there to give each module's PDB identifier. `--symbols <dir>` sets the
+  cache, `--offline` keeps to it, `--no-symbols` skips symbols. Public PDBs
+  carry function names only, so a frame reads `function+0xoffset`, with no
+  line number.

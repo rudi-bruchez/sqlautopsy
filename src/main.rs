@@ -2,6 +2,7 @@ mod decode;
 mod errorlog;
 mod mdmp;
 mod stackdump;
+mod symbols;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -10,12 +11,22 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-const USAGE: &str = "usage: sqlautopsy [--format text|json] <folder-or-file>...
+const USAGE: &str = "usage: sqlautopsy [options] <folder-or-file>...
 
 Reads the SQLDumpNNNN.txt, .log and .mdmp files SQL Server writes into its LOG
 folder and prints, for each dump: build, cause, exception, input buffer, stack
-signature, short stack, threads and loaded modules. Frames are module+offset:
-symbols are not resolved yet.
+signature, short stack, threads and loaded modules.
+
+When the .mdmp is there, the frames and the exception are named with
+Microsoft's public symbols, downloaded once per build from
+msdl.microsoft.com into a local cache.
+
+Options:
+  --format text|json  output format (default: text)
+  --symbols <dir>     symbol cache (default: $SQLAUTOPSY_SYMBOLS, else
+                      ~/.cache/sqlautopsy/symbols or %LOCALAPPDATA%)
+  --offline           use the symbol cache only, never the network
+  --no-symbols        do not resolve symbols
 
 Exit codes: 0 success, 1 no dump could be read, 2 usage error.";
 
@@ -49,6 +60,9 @@ struct Dump {
 fn main() -> ExitCode {
     let mut json = false;
     let mut paths = Vec::new();
+    let mut use_symbols = true;
+    let mut offline = false;
+    let mut cache = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -64,6 +78,12 @@ fn main() -> ExitCode {
                 Some("json") => json = true,
                 Some("text") => json = false,
                 _ => return usage_error("--format takes text or json"),
+            },
+            "--offline" => offline = true,
+            "--no-symbols" => use_symbols = false,
+            "--symbols" => match args.next() {
+                Some(dir) => cache = Some(PathBuf::from(dir)),
+                None => return usage_error("--symbols takes a folder"),
             },
             s if s.starts_with('-') => return usage_error(&format!("unknown option {s}")),
             _ => paths.push(PathBuf::from(arg)),
@@ -84,10 +104,20 @@ fn main() -> ExitCode {
         eprintln!("sqlautopsy: no SQLDumpNNNN.txt, .log or .mdmp file found");
         return ExitCode::FAILURE;
     }
-    let dumps: Vec<Dump> = groups
+    let mut dumps: Vec<Dump> = groups
         .into_iter()
         .map(|(name, files)| analyze(name, &files))
         .collect();
+    let cache = cache.or_else(symbols::default_cache);
+    if use_symbols && let Some(cache) = cache {
+        let mut store = symbols::Symbols::new(cache, offline);
+        for dump in &mut dumps {
+            symbolize(dump, &mut store);
+        }
+        for problem in &store.problems {
+            eprintln!("sqlautopsy: symbols: {problem}");
+        }
+    }
     let analyzed = dumps
         .iter()
         .any(|d| d.text.is_some() || d.errorlog.is_some() || d.minidump.is_some());
@@ -115,6 +145,48 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// Names the frames and exception addresses of a dump with the public PDBs of
+/// its modules, whose identifiers only the `.mdmp` carries.
+fn symbolize(dump: &mut Dump, store: &mut symbols::Symbols) {
+    let Some(minidump) = &mut dump.minidump else {
+        return;
+    };
+    // By lowercase name and by stem: the .txt says `sqllang`, the .mdmp `sqllang.dll`.
+    let mut pdbs: BTreeMap<String, (String, String)> = BTreeMap::new();
+    for m in &minidump.modules {
+        if let (Some(file), Some(id)) = (&m.debug_file, &m.debug_id) {
+            let name = m.name.to_ascii_lowercase();
+            let stem = name
+                .rsplit_once('.')
+                .map_or(name.as_str(), |(s, _)| s)
+                .to_string();
+            pdbs.insert(stem, (file.clone(), id.clone()));
+            pdbs.insert(name, (file.clone(), id.clone()));
+        }
+    }
+    let mut resolve = |module: Option<&String>, offset: Option<&String>| {
+        let (file, id) = pdbs.get(&module?.to_ascii_lowercase())?;
+        let rva = u32::try_from(u64::from_str_radix(offset?, 16).ok()?).ok()?;
+        store.resolve(file, id, rva)
+    };
+    for location in minidump
+        .exception
+        .iter_mut()
+        .map(|e| &mut e.at)
+        .chain(minidump.dump_thread.iter_mut())
+    {
+        location.function = resolve(location.module.as_ref(), location.offset.as_ref());
+    }
+    if let Some(text) = &mut dump.text {
+        if let Some(e) = &mut text.exception {
+            e.function = resolve(e.module.as_ref(), e.offset.as_ref());
+        }
+        for frame in &mut text.stack {
+            frame.function = resolve(frame.module.as_ref(), frame.offset.as_ref());
+        }
     }
 }
 
@@ -274,6 +346,9 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
             if let (Some(m), Some(o)) = (&e.module, &e.offset) {
                 write!(out, " in {m}+{}", short_hex(o))?;
             }
+            if let Some(f) = &e.function {
+                write!(out, " {f}")?;
+            }
             writeln!(out)?;
         }
     }
@@ -298,9 +373,13 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
         if !t.stack.is_empty() {
             writeln!(out, "  stack      {} frames", t.stack.len())?;
             for frame in t.stack.iter().take(TEXT_FRAMES) {
-                match (&frame.module, &frame.offset) {
-                    (Some(m), Some(o)) => writeln!(out, "             {m}+{}", short_hex(o))?,
-                    _ => writeln!(out, "             {}", frame.address)?,
+                let place = match (&frame.module, &frame.offset) {
+                    (Some(m), Some(o)) => format!("{m}+{}", short_hex(o)),
+                    _ => frame.address.clone(),
+                };
+                match &frame.function {
+                    Some(f) => writeln!(out, "             {place:<20} {f}")?,
+                    None => writeln!(out, "             {place}")?,
                 }
             }
             if t.stack.len() > TEXT_FRAMES {
@@ -338,12 +417,18 @@ fn render_minidump(out: &mut String, m: &mdmp::MiniDump) -> std::fmt::Result {
         if let (Some(module), Some(offset)) = (&e.at.module, &e.at.offset) {
             write!(out, " in {module}+{offset}")?;
         }
+        if let Some(f) = &e.at.function {
+            write!(out, " {f}")?;
+        }
         writeln!(out, ", thread {}", e.at.thread_id)?;
     }
     if let Some(d) = &m.dump_thread {
         write!(out, "             no exception; thread {}", d.thread_id)?;
         if let (Some(module), Some(offset)) = (&d.module, &d.offset) {
             write!(out, " at {module}+{offset}")?;
+        }
+        if let Some(f) = &d.function {
+            write!(out, " {f}")?;
         }
         writeln!(out)?;
     }

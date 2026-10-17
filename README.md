@@ -14,14 +14,28 @@ sqlautopsy aims to turn a dump folder into a short diagnosis without either.
 The three files are read: `SQLDumpNNNN.txt`, `.log` and `.mdmp`. From the
 minidump come the system, the exception or the thread the dump records, the
 thread count, and every loaded module with its file version and the identifier
-of its public PDB. Symbols are not resolved yet, so frames are `module+offset`
-without function names, and the stack is not unwound from the minidump.
+of its public PDB.
+
+With the `.mdmp`, the frames of the `.txt` and the exception are named with
+Microsoft's public symbols: `sqllang+6690A4` becomes
+`CSourceColumns::AddSourcesFor+0x504`. The stack is not unwound from the
+minidump itself: that needs the modules' unwind tables, which are in the
+binaries, and Microsoft's symbol server serves the PDBs of SQL Server but not
+its binaries.
 
 ## Usage
 
     sqlautopsy 'C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\Log'
     sqlautopsy --format json ./dumps > report.json
     sqlautopsy SQLDump0011.txt SQLDump0011.log
+
+Symbols are downloaded once per build from `msdl.microsoft.com` (86 MB for
+`sqllang.pdb` of SQL Server 2019) into `~/.cache/sqlautopsy/symbols` on Linux
+and macOS, `%LOCALAPPDATA%\sqlautopsy\symbols` on Windows, or the folder named by
+`--symbols` or `$SQLAUTOPSY_SYMBOLS`. The layout is the SymStore one, so a
+WinDbg symbol cache can be reused. `--offline` reads the cache only;
+`--no-symbols` skips symbols. Only PDB names and identifiers leave the machine,
+never dump content.
 
 A folder is read without recursion; only `SQLDumpNNNN.txt`, `.log` and `.mdmp`
 files are considered. Exit codes: 0 when at least one dump was read, 1 when none

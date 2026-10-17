@@ -42,6 +42,8 @@ pub struct Exception {
     pub address: Option<String>,
     pub module: Option<String>,
     pub offset: Option<String>,
+    /// From the public symbols: `CXStmtQuery::ErsqExecuteQuery+0x1A4`.
+    pub function: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +51,8 @@ pub struct Frame {
     pub address: String,
     pub module: Option<String>,
     pub offset: Option<String>,
+    /// From the public symbols, as for the exception.
+    pub function: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,6 +116,7 @@ fn parse_header(lines: &[String], dump: &mut StackDump) {
                         address: None,
                         module: None,
                         offset: None,
+                        function: None,
                     });
                 }
             }
@@ -154,6 +159,7 @@ fn parse_block(lines: &[String], dump: &mut StackDump) {
                 address: None,
                 module: None,
                 offset: None,
+                function: None,
             });
             exception.address = address;
             exception.module = module;
@@ -221,6 +227,7 @@ fn parse_frame(line: &str) -> Option<Frame> {
         address: address.to_string(),
         module,
         offset,
+        function: None,
     })
 }
 

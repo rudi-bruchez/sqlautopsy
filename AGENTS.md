@@ -36,8 +36,9 @@ So that an agent can drive the tool without reading its source:
   renamed or removed within a schema version;
 - exit codes: 0 success, 1 the input could not be analyzed, 2 usage error;
 - network access only to download public symbols from
-  `msdl.microsoft.com`, never with dump content, and an offline mode that works
-  from the local cache.
+  `msdl.microsoft.com`, never with dump content; `--offline` works from the
+  local cache and `--no-symbols` makes no request at all. Tests never touch the
+  network.
 
 ## Documentation
 

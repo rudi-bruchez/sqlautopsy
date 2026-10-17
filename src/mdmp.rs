@@ -46,6 +46,8 @@ pub struct Location {
     pub address: String,
     pub module: Option<String>,
     pub offset: Option<String>,
+    /// From the public symbols: `CXStmtQuery::ErsqExecuteQuery+0x1A4`.
+    pub function: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,6 +64,9 @@ pub struct Module {
     /// The PDB's GUID and age as the symbol server keys them:
     /// `https://msdl.microsoft.com/download/symbols/<debug_file>/<debug_id>/<debug_file>`.
     pub debug_id: Option<String>,
+    /// The image's timestamp and size as the symbol server keys binaries:
+    /// `<name>/<code_id>/<name>`.
+    pub code_id: Option<String>,
 }
 
 pub fn read(path: &std::path::Path) -> Result<MiniDump, String> {
@@ -81,6 +86,7 @@ pub fn read(path: &std::path::Path) -> Result<MiniDump, String> {
             address: format!("{address:016X}"),
             module: module.map(|m| file_name(&m.code_file()).to_string()),
             offset: module.map(|m| format!("{:X}", address.saturating_sub(m.base_address()))),
+            function: None,
         };
         if !is_exception_code(record.exception_code) {
             dump_thread = Some(at);
@@ -127,6 +133,7 @@ pub fn read(path: &std::path::Path) -> Result<MiniDump, String> {
                     version: m.version().map(|v| v.to_string()),
                     debug_file: m.debug_file().map(|f| file_name(&f).to_string()),
                     debug_id: m.debug_identifier().map(|id| id.breakpad().to_string()),
+                    code_id: m.code_identifier().map(|id| id.to_string()),
                 }
             })
             .collect(),

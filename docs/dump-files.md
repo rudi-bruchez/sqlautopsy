@@ -112,6 +112,23 @@ themselves stay out of this repository.
 - The module list carries each PDB's name, GUID and age. For the SQL Server
   modules, `msdl.microsoft.com` answers on `<pdb>/<GUID><age>/<pdb>` (checked
   for `sqllang.pdb` and `sqlservr.pdb` of 15.0.2080.9).
+- The symbol server serves the PDBs of SQL Server, not its binaries: on
+  `<image>/<TimeDateStamp><SizeOfImage>/<image>`, `sqlservr.exe` and
+  `sqllang.dll` of 10.50.1600.1 and 15.0.2080.9 answer 404 in every form
+  (plain, `.ex_`, `file.ptr`), where `ntdll.dll` of the same dumps answers 200.
+  Unwinding a minidump's stack needs the unwind tables of the binaries, so it
+  needs the `Binn` folder of the same build. Paul Randal's procedure fetches
+  the PDBs with `symchk` run against the instance's own `Binn` folder, which is
+  where the binaries come from
+  ([SQLskills, 2011](https://www.sqlskills.com/blogs/paul/how-to-download-a-sqlservr-pdb-symbol-file/)).
+- In a dump without exception, the thread the exception stream records is the
+  one writing the dump: its instruction resolves to `stackTrace` (non-yielding
+  schedulers, stalled dispatcher, DBCC) or `SQLDumperLibraryInvoke` (latch
+  timeout), not to the code at fault.
+- Public PDBs keep the public symbols only. A function missing from them is
+  named after the nearest one before it, so a large offset, such as
+  `FRunCM+0x5BC97` in a 2008 R2 stack, most likely points into an unnamed
+  function rather than 376 KB into `FRunCM`.
 - The file version of `sqlservr.exe` is not the build: 10.50.1600.1 is
   `2009.100.1600.1`, 15.0.2080.9 is `2019.150.2080.9`.
 - The errorlog carries `Stack Signature for the dump is 0x...` on 2005,
