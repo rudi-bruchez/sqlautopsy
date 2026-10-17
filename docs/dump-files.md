@@ -82,6 +82,32 @@ tables of the modules
 Unwinding x64 stacks therefore needs the module images or their unwind data from
 another source: the binaries from the Microsoft symbol server, or the PDB.
 
+## Observed in real dumps
+
+Measured on thirteen dumps from SQL Server 2005, 2008 R2, 2012 and 2019
+instances (exceptions, non-yielding schedulers, a stalled dispatcher, a latch
+timeout, DBCC corruption). These are what the parser relies on; the dumps
+themselves stay out of this repository.
+
+- The `.txt` is UTF-16 LE with a BOM and CRLF line ends. Lines are padded with
+  spaces to 113 characters, and a longer line is cut into 113-character pieces
+  with no marker: a piece that was cut ends on a non-space character exactly at
+  column 113.
+- The input buffer is written as lines of `*  ` followed by 72 characters, cut
+  at fixed columns, in the middle of a word.
+- Dates in the header are month first whatever the server's locale:
+  `06/27/13 18:53:25 spid 18388`.
+- The module table and the short stack are present for exceptions only.
+  Non-yielding, latch timeout and DBCC dumps carry the cause and, when there is
+  a session, the input buffer, but neither modules nor frames.
+- The `.log` is the last 64 KB of the errorlog, UTF-16 LE without a BOM; its
+  first entry is cut. Exception dumps write
+  `***Stack Dump being sent to ...\SQLDumpNNNN.txt` there; non-yielding dumps
+  write `***Unable to get thread context for spid 0` instead.
+- The errorlog carries `Stack Signature for the dump is 0x...` on 2005,
+  2008 R2, 2012 and 2019 alike. Three divide-by-zero exceptions of one
+  instance, written over two months, share one signature.
+
 ## Not confirmed
 
 - Which sections remain in a `.txt` written with `TEXT_DUMP = LIMITED`.

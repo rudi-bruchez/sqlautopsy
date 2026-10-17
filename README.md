@@ -11,7 +11,21 @@ sqlautopsy aims to turn a dump folder into a short diagnosis without either.
 
 ## Status
 
-Early work. Nothing is usable yet.
+The text files are read: `SQLDumpNNNN.txt` and `.log`. The minidump is not read
+yet, so frames are `module+offset` without function names.
+
+## Usage
+
+    sqlautopsy 'C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\Log'
+    sqlautopsy --format json ./dumps > report.json
+    sqlautopsy SQLDump0011.txt SQLDump0011.log
+
+A folder is read without recursion; only `SQLDumpNNNN.txt`, `.log` and `.mdmp`
+files are considered. Exit codes: 0 when at least one dump was read, 1 when none
+could be, 2 for a usage error.
+
+The input buffer is the text of the batch that was running. It can hold data
+and names from the server: treat the report like the dump itself.
 
 ## What it will report
 
