@@ -18,7 +18,9 @@ of its public PDB.
 
 With the `.mdmp`, the frames of the `.txt` and the exception are named with
 Microsoft's public symbols: `sqllang+6690A4` becomes
-`CSourceColumns::AddSourcesFor+0x504`. The stack is not unwound from the
+`CSourceColumns::AddSourcesFor+0x504`. SQL Server 2025 writes the stack of
+every thread in its `.txt`, each frame with its PDB identifier, so those are
+named without the `.mdmp`. The stack is not unwound from the
 minidump itself: that needs the modules' unwind tables, which are in the
 binaries, and Microsoft's symbol server serves the PDBs of SQL Server but not
 its binaries.

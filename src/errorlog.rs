@@ -20,18 +20,26 @@ pub struct ErrorLog {
 /// dump can also hold the entries of an earlier one. The dump is found by the
 /// `Stack Dump being sent to ...\SQLDump0008.txt` entry, or, for the dumps that
 /// write none (non-yielding schedulers), by the last `BEGIN STACK DUMP:` entry,
-/// the log being the errorlog's tail at the time of this dump.
+/// the log being the errorlog's tail at the time of this dump. 2025 writes
+/// neither: its dump starts at the `**Dump thread` entries, followed by frames.
 pub fn parse(lines: &[String], txt_name: &str) -> ErrorLog {
     let entries = entries(lines);
     let suffix = format!("\\{}", txt_name.to_ascii_lowercase());
     let sent = entries.iter().position(|e| {
         e.contains("Stack Dump being sent to") && e.to_ascii_lowercase().ends_with(&suffix)
     });
-    let Some(anchor) = sent.or_else(|| {
-        entries
-            .iter()
-            .rposition(|e| message(e).starts_with("* BEGIN STACK DUMP:"))
-    }) else {
+    let Some(anchor) = sent
+        .or_else(|| {
+            entries
+                .iter()
+                .rposition(|e| message(e).starts_with("* BEGIN STACK DUMP:"))
+        })
+        .or_else(|| {
+            entries
+                .iter()
+                .rposition(|e| message(e).starts_with("**Dump thread"))
+        })
+    else {
         return ErrorLog::default();
     };
     let stack_signature = entries[anchor..]
@@ -39,7 +47,7 @@ pub fn parse(lines: &[String], txt_name: &str) -> ErrorLog {
         .find_map(|e| e.split("Stack Signature for the dump is ").nth(1))
         .map(|s| s.trim().to_string());
     // The dump's own preamble (star lines, "Using 'dbghelp.dll'") is not context.
-    let preamble = ["*", "Using 'dbghelp.dll'", "CImageHelper::"];
+    let preamble = ["*", "<frame ", "Using 'dbghelp.dll'", "CImageHelper::"];
     let start = entries[..anchor]
         .iter()
         .rposition(|e| !preamble.iter().any(|p| message(e).starts_with(p)))
@@ -128,6 +136,25 @@ to SQL Server during a read.
         assert_eq!(log.stack_signature.as_deref(), Some("0x0000000000000336"));
         assert_eq!(log.before_dump.len(), 1);
         assert!(log.before_dump[0].contains("longer than 15 seconds"));
+    }
+
+    #[test]
+    fn a_2025_dump_is_found_by_its_threads() {
+        let log = "2026-10-17 12:02:03.49 spid101     Using 'dbghelp.dll' version '4.0.5'
+2026-10-17 12:10:00.00 spid70      Error: 17883, Severity: 1, State: 0.
+2026-10-17 12:20:00.43 spid61      CImageHelper::Init () Version-specific dbghelp.dll is not used
+2026-10-17 12:20:00.98 spid61      **Dump thread - spid = 0, EC = 0x000001F9AA502730
+2026-10-17 12:20:00.98 spid61      * User initiated stack dump.  This is not a server exception dump.
+2026-10-17 12:20:00.98 spid61      <frame id=\"00\" pdb=\"ntdll.pdb\" module=\"ntdll\" rva=\"0xA2D34\" />
+2026-10-17 12:20:00.98 spid61      **Dump thread - spid = 61, EC = 0x000001F99D6C2730
+2026-10-17 12:20:00.98 spid61      <frame id=\"00\" pdb=\"SqlDK.pdb\" module=\"SqlDK\" rva=\"0x65CA\" />
+2026-10-17 12:20:00.98 spid61      CImageHelper::DoMiniDump entered. Exception code: 0x80000003
+2026-10-17 12:20:00.98 spid61      Stack Signature for the dump is 0x000000015793D955
+";
+        let log = parse(&lines(log), "SQLDump0001.txt");
+        assert_eq!(log.stack_signature.as_deref(), Some("0x000000015793D955"));
+        assert_eq!(log.before_dump.len(), 2);
+        assert!(log.before_dump[1].ends_with("Error: 17883, Severity: 1, State: 0."));
     }
 
     #[test]

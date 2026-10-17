@@ -219,8 +219,14 @@ fn dumps_command(options: &Options, paths: &[PathBuf]) -> Result<(), String> {
 }
 
 /// Names the frames and exception addresses of a dump with the public PDBs of
-/// its modules, whose identifiers only the `.mdmp` carries.
+/// its modules, whose identifiers only the `.mdmp` carries, except in the
+/// thread stacks of 2025, whose frames carry their own.
 fn symbolize(dump: &mut Dump, store: &mut symbols::Symbols) {
+    if let Some(text) = &mut dump.text {
+        for frame in text.threads.iter_mut().flat_map(|t| t.frames.iter_mut()) {
+            xestack::name(frame, store);
+        }
+    }
     let Some(minidump) = &mut dump.minidump else {
         return;
     };
@@ -459,6 +465,7 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
         if !t.modules.is_empty() {
             writeln!(out, "  modules    {} loaded", t.modules.len())?;
         }
+        render_threads(out, &t.threads)?;
     }
     if let Some(m) = m {
         render_minidump(out, m)?;
@@ -469,6 +476,43 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
         writeln!(out, "  errorlog before the dump")?;
         for entry in &log.before_dump {
             writeln!(out, "             {entry}")?;
+        }
+    }
+    Ok(())
+}
+
+/// The count of 2025 thread stacks, then those of the threads that ran a
+/// session: the others are the server's own workers, waiting.
+fn render_threads(out: &mut String, threads: &[stackdump::Thread]) -> std::fmt::Result {
+    if threads.is_empty() {
+        return Ok(());
+    }
+    let sessions: Vec<_> = threads
+        .iter()
+        .filter(|t| t.spid.unwrap_or(0) != 0)
+        .collect();
+    writeln!(
+        out,
+        "  threads    {} stacks, {} in a session",
+        threads.len(),
+        sessions.len()
+    )?;
+    for thread in sessions {
+        writeln!(
+            out,
+            "  spid {:<5} {} frames",
+            thread.spid.unwrap_or(0),
+            thread.frames.len()
+        )?;
+        for f in thread.frames.iter().take(TEXT_FRAMES) {
+            let place = format!("{}+{}", f.module, f.rva.trim_start_matches("0x"));
+            match &f.function {
+                Some(function) => writeln!(out, "             {place:<20} {function}")?,
+                None => writeln!(out, "             {place}")?,
+            }
+        }
+        if thread.frames.len() > TEXT_FRAMES {
+            writeln!(out, "             ...")?;
         }
     }
     Ok(())

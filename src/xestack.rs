@@ -82,7 +82,8 @@ pub fn parse(text: &str) -> Vec<Stack> {
     stacks
 }
 
-fn parse_frame(tag: &str) -> Option<Frame> {
+/// One `<frame ... />` tag; `None` without its module or offset.
+pub fn parse_frame(tag: &str) -> Option<Frame> {
     let module = attribute(tag, "module")?.to_string();
     let rva = attribute(tag, "rva")?.to_string();
     let pdb = attribute(tag, "pdb").map(str::to_string);
@@ -115,12 +116,17 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 
 pub fn symbolize(stacks: &mut [Stack], store: &mut Symbols) {
     for frame in stacks.iter_mut().flat_map(|s| s.frames.iter_mut()) {
-        let rva = frame.rva.trim_start_matches("0x").trim_start_matches("0X");
-        if let (Some(pdb), Some(id), Ok(rva)) =
-            (&frame.pdb, &frame.debug_id, u32::from_str_radix(rva, 16))
-        {
-            frame.function = store.resolve(pdb, id, rva);
-        }
+        name(frame, store);
+    }
+}
+
+/// Names a frame from the PDB it carries.
+pub fn name(frame: &mut Frame, store: &mut Symbols) {
+    let rva = frame.rva.trim_start_matches("0x").trim_start_matches("0X");
+    if let (Some(pdb), Some(id), Ok(rva)) =
+        (&frame.pdb, &frame.debug_id, u32::from_str_radix(rva, 16))
+    {
+        frame.function = store.resolve(pdb, id, rva);
     }
 }
 

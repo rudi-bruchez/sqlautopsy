@@ -140,11 +140,13 @@ pub fn read(path: &std::path::Path) -> Result<MiniDump, String> {
     })
 }
 
-/// An NTSTATUS of error or warning severity (`c0000005`, `80000003`). SQL
-/// Server writes an exception stream into dumps that have no exception, with
-/// a code of 0 or a value that is not a status (`000042ac`, `59df37e0`).
+/// An NTSTATUS of error or warning severity (`c0000005`). SQL Server writes
+/// an exception stream into dumps that have no exception, with a code of 0 or
+/// a value that is not a status (`000042ac`, `59df37e0`), and on 2025 a
+/// breakpoint (`80000003`) for a `DBCC STACKDUMP`, whose `.txt` says "This is
+/// not a server exception dump".
 fn is_exception_code(code: u32) -> bool {
-    code & 0x8000_0000 != 0
+    code & 0x8000_0000 != 0 && code != 0x8000_0003
 }
 
 /// The file name of a Windows path, whatever the platform reading it.
@@ -199,9 +201,12 @@ mod tests {
 
     #[test]
     fn only_error_and_warning_statuses_are_exceptions() {
-        assert!(is_exception_code(0xC000_0005) && is_exception_code(0x8000_0003));
+        assert!(is_exception_code(0xC000_0005) && is_exception_code(0x8000_0001));
         assert!(
-            !is_exception_code(0) && !is_exception_code(0x42AC) && !is_exception_code(0x59DF_37E0)
+            !is_exception_code(0)
+                && !is_exception_code(0x42AC)
+                && !is_exception_code(0x59DF_37E0)
+                && !is_exception_code(0x8000_0003)
         );
     }
 

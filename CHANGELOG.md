@@ -36,3 +36,10 @@ section fails the release workflow.
   Events action `package0.callstack_rva` (SQL Server 2022 and later), from a
   histogram or ring buffer target, an `event_file` read back as XML, or
   standard input. Identical stacks are merged and counted.
+- SQL Server 2025 dumps are read: their `.txt` writes every thread's stack with
+  each frame's PDB identifier, and these are reported per thread and named
+  from the public symbols, with or without the `.mdmp`. The text report shows
+  the threads that were running a session. Lines padded to 187 characters
+  are joined as the 113-character ones of older versions are.
+- A `DBCC STACKDUMP` on 2025 is reported as user initiated, not as a
+  breakpoint exception.

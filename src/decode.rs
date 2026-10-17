@@ -1,12 +1,5 @@
 //! Turns the bytes of a `.txt` or `.log` into lines.
 
-/// SQL Server writes the `.txt` as UTF-16 LE with lines padded to 113
-/// characters, and cuts a longer line into 113-character pieces. A piece that
-/// was cut ends on a non-space character exactly at that width.
-// ponytail: fixed width, measured on 2008 R2, 2012 and 2019 dumps; read it
-// from the file if another version writes a different one.
-const WRAP_WIDTH: usize = 113;
-
 /// Decodes UTF-16 LE (with or without a BOM; the `.log` has none and may
 /// start in the middle of an entry) or, failing that, UTF-8, lossily: a
 /// malformed character becomes U+FFFD rather than an error.
@@ -28,7 +21,16 @@ pub fn decode(bytes: &[u8]) -> String {
 
 /// Splits into lines and joins the pieces of lines cut at the wrap width.
 /// Trailing padding is kept: the input buffer is cut at fixed columns too.
+///
+/// SQL Server pads every line of the `.txt` with spaces to a fixed width, 113
+/// characters up to 2019 and 187 on 2025, and cuts a longer line into pieces
+/// of that width; a piece that was cut ends on a non-space character exactly
+/// at the width. The width is read from the text: the length most non-empty
+/// lines share. Measured on 17 dumps, that length holds 73 to 99 % of the
+/// lines of a `.txt` and at most 50 % of those of a `.log`, which is not
+/// padded and is left as it is.
 pub fn lines(text: &str) -> Vec<String> {
+    let width = wrap_width(text);
     let mut out: Vec<String> = Vec::new();
     let mut continues = false;
     for line in text.split('\n') {
@@ -36,9 +38,21 @@ pub fn lines(text: &str) -> Vec<String> {
             Some(last) if continues => last.push_str(line),
             _ => out.push(line.to_string()),
         }
-        continues = line.chars().count() == WRAP_WIDTH && !line.ends_with(' ');
+        continues = Some(line.chars().count()) == width && !line.ends_with(' ');
     }
     out
+}
+
+/// The length shared by more than two thirds of the non-empty lines.
+fn wrap_width(text: &str) -> Option<usize> {
+    let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut total = 0;
+    for line in text.split('\n').filter(|l| !l.is_empty()) {
+        *counts.entry(line.chars().count()).or_default() += 1;
+        total += 1;
+    }
+    let (width, count) = counts.into_iter().max_by_key(|&(_, c)| c)?;
+    (count * 3 > total * 2).then_some(width)
 }
 
 #[cfg(test)]
@@ -67,12 +81,26 @@ mod tests {
 
     #[test]
     fn joins_lines_cut_at_the_wrap_width() {
-        let first = "x".repeat(WRAP_WIDTH);
-        let padded = format!("{:<WRAP_WIDTH$}", "version 15.0.2080.9");
-        let text = format!("{first}\nrest\n{padded}\nnext");
-        let lines = lines(&text);
-        assert_eq!(lines[0], format!("{first}rest"));
-        assert_eq!(lines[1].trim_end(), "version 15.0.2080.9");
-        assert_eq!(lines[2], "next");
+        for width in [113, 187] {
+            let first = "x".repeat(width);
+            let pad = |s: &str| format!("{s:<width$}");
+            let text = [
+                first.clone(),
+                pad("rest"),
+                pad("version 15.0.2080.9"),
+                pad("next"),
+            ]
+            .join("\n");
+            let lines = lines(&text);
+            assert_eq!(lines[0].trim_end(), format!("{first}rest"), "{width}");
+            assert_eq!(lines[1].trim_end(), "version 15.0.2080.9");
+            assert_eq!(lines[2].trim_end(), "next");
+        }
+    }
+
+    #[test]
+    fn unpadded_text_is_not_joined() {
+        let log = "2022-02-18 13:58:00.10 spid51      Error: 823.\nshort\nx";
+        assert_eq!(lines(log).len(), 3);
     }
 }

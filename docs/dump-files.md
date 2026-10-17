@@ -86,13 +86,16 @@ another source: the binaries from the Microsoft symbol server, or the PDB.
 
 Measured on thirteen dumps from SQL Server 2005, 2008 R2, 2012 and 2019
 instances (exceptions, non-yielding schedulers, a stalled dispatcher, a latch
-timeout, DBCC corruption). These are what the parser relies on; the dumps
+timeout, DBCC corruption), and on one `DBCC STACKDUMP` of a 2025 RTM instance
+(17.0.1000.7, Windows Server 2019) in a lab. These are what the parser relies on; the dumps
 themselves stay out of this repository.
 
 - The `.txt` is UTF-16 LE with a BOM and CRLF line ends. Lines are padded with
-  spaces to 113 characters, and a longer line is cut into 113-character pieces
-  with no marker: a piece that was cut ends on a non-space character exactly at
-  column 113.
+  spaces to 113 characters (187 on 2025), and a longer line is cut into pieces
+  of that width with no marker: a piece that was cut ends on a non-space
+  character exactly at the last column. The width is the length that 73 to
+  99 % of a `.txt`'s non-empty lines share; the `.log` is not padded, and no
+  length covers more than half of its lines.
 - The input buffer is written as lines of `*  ` followed by 72 characters, cut
   at fixed columns, in the middle of a word.
 - Dates in the header are month first whatever the server's locale:
@@ -131,8 +134,26 @@ themselves stay out of this repository.
   function rather than 376 KB into `FRunCM`.
 - The file version of `sqlservr.exe` is not the build: 10.50.1600.1 is
   `2009.100.1600.1`, 15.0.2080.9 is `2019.150.2080.9`.
+- The 2025 `.txt` has no `BEGIN STACK DUMP:` block, no module table and no
+  short stack. After the header it writes every thread (48 on an idle lab
+  instance): a `**Dump thread - spid = N, EC = ...` line, the cause between
+  star lines (`User initiated stack dump.  This is not a server exception
+  dump.`), a `Stack range` line, then the frames in the form of the Extended
+  Events action `callstack_rva`, `<frame id="00" address=... pdb="sqlmin.pdb"
+  age="2" guid="..." module="sqlmin" rva="0x1D71588" />`, every one with
+  `id="00"`. Each frame carries its PDB's identifier, so the stacks are named
+  from the public symbols without the `.mdmp`, and without unwinding anything:
+  all the PDBs of that dump, `sqlmin` and `sqllang` included, are on
+  `msdl.microsoft.com`. Older versions write a single `**Dump thread` line,
+  before their block.
+- The `.mdmp` of that 2025 `DBCC STACKDUMP` records a breakpoint, `80000003`,
+  which the errorlog confirms (`Exception record exists. Exception code:
+  0x80000003`), on a dump the `.txt` calls user initiated. Its `.log` has
+  neither `Stack Dump being sent to` nor `BEGIN STACK DUMP:`: the dump starts
+  at the first `**Dump thread` entry, and only the first thread is copied
+  there.
 - The errorlog carries `Stack Signature for the dump is 0x...` on 2005,
-  2008 R2, 2012 and 2019 alike. Three divide-by-zero exceptions of one
+  2008 R2, 2012, 2019 and 2025 alike. Three divide-by-zero exceptions of one
   instance, written over two months, share one signature.
 
 ## Not confirmed
