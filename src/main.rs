@@ -3,6 +3,7 @@ mod errorlog;
 mod mdmp;
 mod stackdump;
 mod symbols;
+mod xestack;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -12,6 +13,7 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 const USAGE: &str = "usage: sqlautopsy [options] <folder-or-file>...
+       sqlautopsy [options] stack [file]
 
 Reads the SQLDumpNNNN.txt, .log and .mdmp files SQL Server writes into its LOG
 folder and prints, for each dump: build, cause, exception, input buffer, stack
@@ -21,6 +23,11 @@ When the .mdmp is there, the frames and the exception are named with
 Microsoft's public symbols, downloaded once per build from
 msdl.microsoft.com into a local cache.
 
+stack reads Extended Events output captured with package0.callstack_rva
+(SQL Server 2022 and later): a histogram or ring buffer target, an event_file
+read back as XML, or the frames alone, from a file or standard input. It merges
+identical stacks, counts them and names their frames.
+
 Options:
   --format text|json  output format (default: text)
   --symbols <dir>     symbol cache (default: $SQLAUTOPSY_SYMBOLS, else
@@ -28,7 +35,7 @@ Options:
   --offline           use the symbol cache only, never the network
   --no-symbols        do not resolve symbols
 
-Exit codes: 0 success, 1 no dump could be read, 2 usage error.";
+Exit codes: 0 success, 1 nothing could be read, 2 usage error.";
 
 /// Bumped when a field is renamed or removed; adding one keeps it.
 const SCHEMA: u32 = 1;
@@ -57,12 +64,43 @@ struct Dump {
     problems: Vec<String>,
 }
 
+/// Options shared by both commands.
+struct Options {
+    json: bool,
+    symbols: bool,
+    offline: bool,
+    cache: Option<PathBuf>,
+}
+
+impl Options {
+    /// The symbol store, unless symbols are off or no cache folder is known.
+    fn store(&self) -> Option<symbols::Symbols> {
+        let cache = self.cache.clone().or_else(symbols::default_cache)?;
+        self.symbols
+            .then(|| symbols::Symbols::new(cache, self.offline))
+    }
+
+    fn print<T: Serialize>(&self, value: &T, text: impl FnOnce() -> String) -> Result<(), String> {
+        if self.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).map_err(|e| e.to_string())?
+            );
+        } else {
+            print!("{}", text());
+        }
+        Ok(())
+    }
+}
+
 fn main() -> ExitCode {
-    let mut json = false;
+    let mut options = Options {
+        json: false,
+        symbols: true,
+        offline: false,
+        cache: None,
+    };
     let mut paths = Vec::new();
-    let mut use_symbols = true;
-    let mut offline = false;
-    let mut cache = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -75,42 +113,84 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "--format" => match args.next().as_deref() {
-                Some("json") => json = true,
-                Some("text") => json = false,
+                Some("json") => options.json = true,
+                Some("text") => options.json = false,
                 _ => return usage_error("--format takes text or json"),
             },
-            "--offline" => offline = true,
-            "--no-symbols" => use_symbols = false,
+            "--offline" => options.offline = true,
+            "--no-symbols" => options.symbols = false,
             "--symbols" => match args.next() {
-                Some(dir) => cache = Some(PathBuf::from(dir)),
+                Some(dir) => options.cache = Some(PathBuf::from(dir)),
                 None => return usage_error("--symbols takes a folder"),
             },
+            "-" => paths.push(PathBuf::from(arg)),
             s if s.starts_with('-') => return usage_error(&format!("unknown option {s}")),
             _ => paths.push(PathBuf::from(arg)),
         }
     }
-    if paths.is_empty() {
+    let result = if paths.first().is_some_and(|p| p.as_os_str() == "stack") {
+        match &paths[1..] {
+            [] => stack_command(&options, None),
+            [file] => stack_command(&options, Some(file)),
+            _ => return usage_error("stack reads one file, or standard input"),
+        }
+    } else if paths.is_empty() {
         return usage_error("no folder or file given");
-    }
-
-    let groups = match collect(&paths) {
-        Ok(groups) => groups,
+    } else {
+        dumps_command(&options, &paths)
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("sqlautopsy: {e}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
+    }
+}
+
+#[derive(Serialize)]
+struct StackReport<'a> {
+    schema: u32,
+    stacks: &'a [xestack::Stack],
+}
+
+/// `sqlautopsy stack [file]`: names the frames of `callstack_rva` stacks.
+fn stack_command(options: &Options, file: Option<&PathBuf>) -> Result<(), String> {
+    let bytes = if let Some(f) = file.filter(|f| f.as_os_str() != "-") {
+        std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?
+    } else {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf).map_err(|e| e.to_string())?;
+        buf
     };
+    let mut stacks = xestack::parse(&decode::decode(&bytes));
+    if stacks.is_empty() {
+        return Err("no callstack_rva frame found (<frame ... rva=\"...\" />)".to_string());
+    }
+    if let Some(mut store) = options.store() {
+        xestack::symbolize(&mut stacks, &mut store);
+        for problem in &store.problems {
+            eprintln!("sqlautopsy: symbols: {problem}");
+        }
+    }
+    let report = StackReport {
+        schema: SCHEMA,
+        stacks: &stacks,
+    };
+    options.print(&report, || xestack::render(&stacks))
+}
+
+/// `sqlautopsy <folder-or-file>...`: reads `SQLDumper` files.
+fn dumps_command(options: &Options, paths: &[PathBuf]) -> Result<(), String> {
+    let groups = collect(paths)?;
     if groups.is_empty() {
-        eprintln!("sqlautopsy: no SQLDumpNNNN.txt, .log or .mdmp file found");
-        return ExitCode::FAILURE;
+        return Err("no SQLDumpNNNN.txt, .log or .mdmp file found".to_string());
     }
     let mut dumps: Vec<Dump> = groups
         .into_iter()
         .map(|(name, files)| analyze(name, &files))
         .collect();
-    let cache = cache.or_else(symbols::default_cache);
-    if use_symbols && let Some(cache) = cache {
-        let mut store = symbols::Symbols::new(cache, offline);
+    if let Some(mut store) = options.store() {
         for dump in &mut dumps {
             symbolize(dump, &mut store);
         }
@@ -125,26 +205,16 @@ fn main() -> ExitCode {
         schema: SCHEMA,
         dumps,
     };
-    if json {
-        match serde_json::to_string_pretty(&report) {
-            Ok(s) => println!("{s}"),
-            Err(e) => {
-                eprintln!("sqlautopsy: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    } else {
-        print!("{}", render(&report));
-    }
+    options.print(&report, || render(&report))?;
     for dump in &report.dumps {
         for problem in &dump.problems {
             eprintln!("sqlautopsy: {}: {problem}", dump.name);
         }
     }
     if analyzed {
-        ExitCode::SUCCESS
+        Ok(())
     } else {
-        ExitCode::FAILURE
+        Err("no dump could be read".to_string())
     }
 }
 

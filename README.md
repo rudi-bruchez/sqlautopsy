@@ -72,6 +72,19 @@ Public symbols carry function names only: no types, no local variables, no line
 numbers. SQLOS structures (schedulers, workers, tasks) cannot be decoded from a
 dump with them, and sqlautopsy does not try.
 
+## Extended Events call stacks
+
+The same symbols name the stacks that Extended Events capture with
+`package0.callstack_rva` (SQL Server 2022 and later), to follow what SQL Server
+does on demand rather than after a crash:
+
+    sqlautopsy stack stacks.xml
+    ... | sqlautopsy stack
+
+It reads a histogram or ring buffer target, or an `event_file` read back as
+XML, merges identical stacks and counts them. How to capture:
+[docs/xe-stacks.md](docs/xe-stacks.md).
+
 ## Using it from an AI agent
 
 The CLI is meant to be driven by a coding agent as well as by a person: no
@@ -82,6 +95,7 @@ versioned schema, documented exit codes. The contract is in
 ## Documentation
 
 - [What SQL Server writes when it dumps](docs/dump-files.md)
+- [Extended Events call stacks](docs/xe-stacks.md)
 - [Development and releases](docs/development.md)
 - [Changelog](CHANGELOG.md)
 

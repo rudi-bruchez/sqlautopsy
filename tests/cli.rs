@@ -67,3 +67,35 @@ fn exit_codes() {
     assert_eq!(run(&[empty.to_str().unwrap()]).status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&empty);
 }
+
+#[test]
+fn stack_reads_standard_input() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let histogram = r#"<HistogramTarget><Slot count="4"><value><![CDATA[<frame id="00" pdb="sqllang.pdb" age="2" guid="A1EE9134-BEFA-47A3-B2A6-1129DC226721" module="sqllang" rva="0x31C857" /><frame id="01" module="SqlDK" rva="0x8D8E" />]]></value></Slot></HistogramTarget>"#;
+    let run_stdin = |input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_sqlautopsy"))
+            .args(["--no-symbols", "--format", "json", "stack"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let out = run_stdin(histogram);
+    assert_eq!(out.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema"], 1);
+    assert_eq!(report["stacks"][0]["count"], 4);
+    assert_eq!(report["stacks"][0]["frames"][1]["module"], "SqlDK");
+    assert_eq!(run_stdin("no frames here").status.code(), Some(1));
+    assert_eq!(run(&["stack", "a", "b"]).status.code(), Some(2));
+}

@@ -32,3 +32,7 @@ section fails the release workflow.
   cache, `--offline` keeps to it, `--no-symbols` skips symbols. Public PDBs
   carry function names only, so a frame reads `function+0xoffset`, with no
   line number.
+- `sqlautopsy stack [file]` names the call stacks captured by the Extended
+  Events action `package0.callstack_rva` (SQL Server 2022 and later), from a
+  histogram or ring buffer target, an `event_file` read back as XML, or
+  standard input. Identical stacks are merged and counted.
