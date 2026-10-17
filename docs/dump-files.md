@@ -86,8 +86,9 @@ another source: the binaries from the Microsoft symbol server, or the PDB.
 
 Measured on thirteen dumps from SQL Server 2005, 2008 R2, 2012 and 2019
 instances (exceptions, non-yielding schedulers, a stalled dispatcher, a latch
-timeout, DBCC corruption), and on one `DBCC STACKDUMP` of a 2025 RTM instance
-(17.0.1000.7, Windows Server 2019) in a lab. These are what the parser relies on; the dumps
+timeout, DBCC corruption), and on two dumps of 2025 RTM instances
+(17.0.1000.7, Windows Server 2019) made in a lab, a `DBCC STACKDUMP` and a
+dump trigger on a deadlock. These are what the parser relies on; the dumps
 themselves stay out of this repository.
 
 - The `.txt` is UTF-16 LE with a BOM and CRLF line ends. Lines are padded with
@@ -146,6 +147,13 @@ themselves stay out of this repository.
   all the PDBs of that dump, `sqlmin` and `sqllang` included, are on
   `msdl.microsoft.com`. Older versions write a single `**Dump thread` line,
   before their block.
+- On 2025, a dump triggered by an error (`DBCC DUMPTRIGGER('set', 1205)`, then
+  a deadlock) keeps the old layout, with its `BEGIN STACK DUMP:` block, input
+  buffer and module table. The cause reads `Server was configured to produce
+  dump on the following event - ex_dump_if_requested: Exception raised,
+  major=12, minor=5, state=51, severity=13`: major and minor are the error
+  number, 1205, split in two. Its short stack follows a `Stack range` line, in
+  the `<frame ... />` form, and that dump wrote no `.mdmp`.
 - The `.mdmp` of that 2025 `DBCC STACKDUMP` records a breakpoint, `80000003`,
   which the errorlog confirms (`Exception record exists. Exception code:
   0x80000003`), on a dump the `.txt` calls user initiated. Its `.log` has

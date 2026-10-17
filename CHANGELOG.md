@@ -43,3 +43,6 @@ section fails the release workflow.
   are joined as the 113-character ones of older versions are.
 - A `DBCC STACKDUMP` on 2025 is reported as user initiated, not as a
   breakpoint exception.
+- The cause of a dump made by `DBCC DUMPTRIGGER` is reported, and the short
+  stack of a 2025 dump, written in the `<frame ... />` form, is named as the
+  dumping session's stack, without the `.mdmp`.

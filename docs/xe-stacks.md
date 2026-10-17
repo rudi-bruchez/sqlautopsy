@@ -61,7 +61,14 @@ On SQL Server 2025 CU7 (17.0.4065.4, Linux container), 17 October 2026:
   With an age of 2, both readings give the same key, and `msdl.microsoft.com`
   answered 200 on it for `sqllang.pdb` and `SqlDK.pdb`.
 - On Linux, the `kernel32` and `ntdll` frames belong to SQLPAL, and their PDBs
-  are not on the symbol server (404). Those frames stay unnamed.
+  are not on the symbol server (404). Those frames stay unnamed. On Windows
+  (2025 RTM, Windows Server 2019), they are named: `BaseThreadInitThunk` and
+  `RtlUserThreadStart` at the bottom of every stack.
+- The same capture on 2025 RTM for Windows gives the same shape of stack, from
+  `SchedulerManager::ThreadEntryPoint` to
+  `XeSqlPkg::sql_statement_completed::Publish`, 18 frames in all. One frame in
+  `sqllang` names itself as a destructor of `CAutoClearXVariantPtr` at offset
+  `0x823`, another case of a function missing from the public PDB.
 - The top frame named itself `IServerConfiguration::SubscribeAndGetDynamicStringSetting+0x12A`
   above `GenericEvent::PublishAndCallAction`. That is most likely the
   action's own capture code, which public symbols do not name: a public PDB
