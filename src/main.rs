@@ -1,5 +1,6 @@
 mod decode;
 mod errorlog;
+mod mdmp;
 mod stackdump;
 
 use std::collections::BTreeMap;
@@ -11,9 +12,10 @@ use serde::Serialize;
 
 const USAGE: &str = "usage: sqlautopsy [--format text|json] <folder-or-file>...
 
-Reads the SQLDumpNNNN.txt and .log files SQL Server writes into its LOG folder
-and prints, for each dump: build, cause, exception, input buffer, stack
-signature, short stack and loaded modules. The .mdmp is listed, not read yet.
+Reads the SQLDumpNNNN.txt, .log and .mdmp files SQL Server writes into its LOG
+folder and prints, for each dump: build, cause, exception, input buffer, stack
+signature, short stack, threads and loaded modules. Frames are module+offset:
+symbols are not resolved yet.
 
 Exit codes: 0 success, 1 no dump could be read, 2 usage error.";
 
@@ -39,6 +41,7 @@ struct Dump {
     files: Vec<String>,
     text: Option<stackdump::StackDump>,
     errorlog: Option<errorlog::ErrorLog>,
+    minidump: Option<mdmp::MiniDump>,
     /// Files that could not be read, with the reason.
     problems: Vec<String>,
 }
@@ -87,7 +90,7 @@ fn main() -> ExitCode {
         .collect();
     let analyzed = dumps
         .iter()
-        .any(|d| d.text.is_some() || d.errorlog.is_some());
+        .any(|d| d.text.is_some() || d.errorlog.is_some() || d.minidump.is_some());
     let report = Report {
         schema: SCHEMA,
         dumps,
@@ -174,6 +177,7 @@ fn analyze(name: String, files: &[PathBuf]) -> Dump {
             .collect(),
         text: None,
         errorlog: None,
+        minidump: None,
         problems: Vec::new(),
         name,
     };
@@ -188,6 +192,12 @@ fn analyze(name: String, files: &[PathBuf]) -> Dump {
         match read_lines(log) {
             Ok(lines) => dump.errorlog = Some(errorlog::parse(&lines, &txt_name)),
             Err(e) => dump.problems.push(e),
+        }
+    }
+    if let Some(mdmp) = with_ext("mdmp") {
+        match mdmp::read(mdmp) {
+            Ok(m) => dump.minidump = Some(m),
+            Err(e) => dump.problems.push(format!("{}.mdmp: {e}", dump.name)),
         }
     }
     dump
@@ -223,15 +233,31 @@ fn render(report: &Report) -> String {
 
 fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
     let t = dump.text.as_ref();
+    let m = dump.minidump.as_ref();
     let field = |v: Option<&str>| v.unwrap_or("?").to_string();
     writeln!(
         out,
         "{}  {}  {} {}",
         dump.name,
-        field(t.and_then(|t| t.time.as_deref())),
+        field(
+            t.and_then(|t| t.time.as_deref())
+                .or_else(|| m.and_then(|m| m.time.as_deref()))
+        ),
         field(t.and_then(|t| t.product.as_deref())),
         field(t.and_then(|t| t.version.as_deref())),
     )?;
+    if t.is_none_or(|t| t.version.is_none())
+        && let Some(v) = m.and_then(|m| {
+            let exe = m
+                .modules
+                .iter()
+                .find(|x| x.name.eq_ignore_ascii_case("sqlservr.exe"));
+            exe?.version.as_deref()
+        })
+    {
+        // The file version does not map to the build: 2008 R2 10.50.1600.1 is 2009.100.1600.1.
+        writeln!(out, "  sqlservr   file version {v}")?;
+    }
     writeln!(out, "  files      {}", dump.files.join(", "))?;
     if let Some(t) = t {
         if let Some(spid) = t.spid {
@@ -285,6 +311,9 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
             writeln!(out, "  modules    {} loaded", t.modules.len())?;
         }
     }
+    if let Some(m) = m {
+        render_minidump(out, m)?;
+    }
     if let Some(log) = &dump.errorlog
         && !log.before_dump.is_empty()
     {
@@ -292,6 +321,31 @@ fn render_dump(out: &mut String, dump: &Dump) -> std::fmt::Result {
         for entry in &log.before_dump {
             writeln!(out, "             {entry}")?;
         }
+    }
+    Ok(())
+}
+
+fn render_minidump(out: &mut String, m: &mdmp::MiniDump) -> std::fmt::Result {
+    writeln!(
+        out,
+        "  minidump   {}, {} threads, {} modules",
+        m.os.as_deref().unwrap_or("?"),
+        m.threads,
+        m.modules.len()
+    )?;
+    if let Some(e) = &m.exception {
+        write!(out, "             exception {} {}", e.code, e.reason)?;
+        if let (Some(module), Some(offset)) = (&e.at.module, &e.at.offset) {
+            write!(out, " in {module}+{offset}")?;
+        }
+        writeln!(out, ", thread {}", e.at.thread_id)?;
+    }
+    if let Some(d) = &m.dump_thread {
+        write!(out, "             no exception; thread {}", d.thread_id)?;
+        if let (Some(module), Some(offset)) = (&d.module, &d.offset) {
+            write!(out, " at {module}+{offset}")?;
+        }
+        writeln!(out)?;
     }
     Ok(())
 }

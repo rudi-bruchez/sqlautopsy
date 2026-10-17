@@ -104,6 +104,16 @@ themselves stay out of this repository.
   first entry is cut. Exception dumps write
   `***Stack Dump being sent to ...\SQLDumpNNNN.txt` there; non-yielding dumps
   write `***Unable to get thread context for spid 0` instead.
+- Every `.mdmp` has an exception stream, including the dumps that have no
+  exception. Those carry a code of 0 or a value that is not an NTSTATUS
+  (`000042ac`, `59df37e0`); only a code with the high bit set (`c0000005`,
+  `c0000094`) is an exception. For the four real exceptions, the module and
+  offset of the `.mdmp` match the `Exception Address` of the `.txt`.
+- The module list carries each PDB's name, GUID and age. For the SQL Server
+  modules, `msdl.microsoft.com` answers on `<pdb>/<GUID><age>/<pdb>` (checked
+  for `sqllang.pdb` and `sqlservr.pdb` of 15.0.2080.9).
+- The file version of `sqlservr.exe` is not the build: 10.50.1600.1 is
+  `2009.100.1600.1`, 15.0.2080.9 is `2019.150.2080.9`.
 - The errorlog carries `Stack Signature for the dump is 0x...` on 2005,
   2008 R2, 2012 and 2019 alike. Three divide-by-zero exceptions of one
   instance, written over two months, share one signature.

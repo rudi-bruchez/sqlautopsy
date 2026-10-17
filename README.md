@@ -11,8 +11,11 @@ sqlautopsy aims to turn a dump folder into a short diagnosis without either.
 
 ## Status
 
-The text files are read: `SQLDumpNNNN.txt` and `.log`. The minidump is not read
-yet, so frames are `module+offset` without function names.
+The three files are read: `SQLDumpNNNN.txt`, `.log` and `.mdmp`. From the
+minidump come the system, the exception or the thread the dump records, the
+thread count, and every loaded module with its file version and the identifier
+of its public PDB. Symbols are not resolved yet, so frames are `module+offset`
+without function names, and the stack is not unwound from the minidump.
 
 ## Usage
 

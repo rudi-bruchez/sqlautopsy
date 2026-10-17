@@ -21,4 +21,8 @@ section fails the release workflow.
   before the dump.
 - `--format json` prints the same report with every frame and module, under
   `"schema": 1`.
-- The `.mdmp` is listed with its dump but not read yet.
+- The `.mdmp` is read: Windows version, processor, thread count, the exception
+  with its thread, module and offset (and, for an access violation, the address
+  that was read or written), and each loaded module with its path, file version,
+  PDB name and PDB identifier. A dump written without an exception reports the
+  thread its exception stream records instead of a false exception.
